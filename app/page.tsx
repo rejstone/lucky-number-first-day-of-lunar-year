@@ -28,7 +28,10 @@ export default function HomePage() {
   });
   const [message, setMessage] = useState<string>('');
   const [toastMessage, setToastMessage] = useState<string>('');
+  const [winnerModalNumber, setWinnerModalNumber] = useState<string>('');
+  const [winnerModalPrizeKey, setWinnerModalPrizeKey] = useState<PrizeKey | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const winnerModalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const normalizeResults = (raw: unknown): LotteryResults => {
     const record = (raw ?? {}) as Record<string, unknown>;
@@ -56,6 +59,9 @@ export default function HomePage() {
     return () => {
       if (toastTimerRef.current) {
         clearTimeout(toastTimerRef.current);
+      }
+      if (winnerModalTimerRef.current) {
+        clearTimeout(winnerModalTimerRef.current);
       }
     };
   }, []);
@@ -102,6 +108,21 @@ export default function HomePage() {
       toastTimerRef.current = null;
     }, 4200);
   };
+
+  const showWinnerModal = (key: PrizeKey, value: string) => {
+    setWinnerModalPrizeKey(key);
+    setWinnerModalNumber(value);
+    if (winnerModalTimerRef.current) {
+      clearTimeout(winnerModalTimerRef.current);
+    }
+    winnerModalTimerRef.current = setTimeout(() => {
+      setWinnerModalNumber('');
+      setWinnerModalPrizeKey(null);
+      winnerModalTimerRef.current = null;
+    }, 15000);
+  };
+
+  const formatDisplayNumber = (key: PrizeKey, value: string) => (key === 'consolation' ? `_${value}` : value);
 
   const validateEntry = (key: PrizeKey, value: string): string | null => {
     const { digits } = META[key];
@@ -169,6 +190,7 @@ export default function HomePage() {
       setInputs((prev) => ({ ...prev, [key]: '' }));
       setMessage(`Đã lưu ${value} cho ${META[key].label}.`);
       setToastMessage('');
+      showWinnerModal(key, value);
     } catch {
       const text = 'Không thể lưu dữ liệu vào file.';
       setMessage(text);
@@ -183,7 +205,7 @@ export default function HomePage() {
         <p className="subtitle">Quay số từ 0000 - 2999</p>
 
         {ORDER.map((key) => (
-          <section className="input-card" key={key}>
+          <section className={`input-card input-${key}`} key={key}>
             <h2>
               {META[key].label} ({META[key].label === 'Giải khuyến khích' ? `${results[key].length * 3}/${META[key].max * 3}` : `${results[key].length}/${META[key].max}`})
             </h2>
@@ -228,7 +250,7 @@ export default function HomePage() {
                     {results[key].length === 0 ? (
                       <p className="empty-state">Chưa có kết quả</p>
                     ) : (
-                      <p className="single-number">{results[key][0]}</p>
+                      <p className="single-number">{formatDisplayNumber(key, results[key][0])}</p>
                     )}
                   </div>
                 ) : key === 'second' ? (
@@ -238,7 +260,7 @@ export default function HomePage() {
                     ) : (
                       results[key].map((n) => (
                         <li className="single-chip" key={n}>
-                          {n}
+                          {formatDisplayNumber(key, n)}
                         </li>
                       ))
                     )}
@@ -248,7 +270,7 @@ export default function HomePage() {
                     {results[key].length === 0 ? (
                       <li className="empty-state">Chưa có kết quả</li>
                     ) : (
-                      results[key].map((n) => <li key={n}>{n}</li>)
+                      results[key].map((n) => <li key={n}>{formatDisplayNumber(key, n)}</li>)
                     )}
                   </ul>
                 )}
@@ -258,6 +280,17 @@ export default function HomePage() {
         </div>
       </section>
       {toastMessage && <div className="toast-error">{toastMessage}</div>}
+      {winnerModalNumber && (
+        <div className="winner-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="winner-modal">
+            <p>
+              Chúc mừng số <br />
+              <strong>{winnerModalPrizeKey ? formatDisplayNumber(winnerModalPrizeKey, winnerModalNumber) : winnerModalNumber}</strong>
+              <br /> đã trúng giải!<br/>
+            </p>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
