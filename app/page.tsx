@@ -1,12 +1,12 @@
-'use client';
+﻿'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { EMPTY_RESULTS, LotteryResults } from '@/lib/types';
 
 type PrizeKey = keyof LotteryResults;
 
 const META: Record<PrizeKey, { label: string; max: number; digits: number }> = {
-  consolation: { label: 'Giải khuyến khích', max: 45, digits: 3 },
+  consolation: { label: 'Giải khuyến khích', max: 15, digits: 3 },
   third: { label: 'Giải ba', max: 5, digits: 4 },
   second: { label: 'Giải nhì', max: 3, digits: 4 },
   first: { label: 'Giải nhất', max: 1, digits: 4 },
@@ -14,6 +14,8 @@ const META: Record<PrizeKey, { label: string; max: number; digits: number }> = {
 };
 
 const ORDER: PrizeKey[] = ['consolation', 'third', 'second', 'first', 'special'];
+const TOAST_KEYS: PrizeKey[] = ['third', 'second', 'first', 'special'];
+const LAST3_DUPLICATE_PREFIX = '3 số cuối';
 
 export default function HomePage() {
   const [results, setResults] = useState<LotteryResults>(EMPTY_RESULTS);
@@ -25,14 +27,37 @@ export default function HomePage() {
     special: ''
   });
   const [message, setMessage] = useState<string>('');
+  const [toastMessage, setToastMessage] = useState<string>('');
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const normalizeResults = (raw: unknown): LotteryResults => {
+    const record = (raw ?? {}) as Record<string, unknown>;
+    const next = { ...EMPTY_RESULTS };
+
+    ORDER.forEach((key) => {
+      const items = Array.isArray(record[key]) ? record[key] : [];
+      next[key] = items
+        .map((item) => String(item ?? '').trim())
+        .filter((item) => item.length > 0)
+        .slice(0, META[key].max);
+    });
+
+    return next;
+  };
 
   useEffect(() => {
     void fetch('/api/results')
       .then(async (r) => {
-        const data = (await r.json()) as LotteryResults;
+        const data = normalizeResults(await r.json());
         setResults(data);
       })
       .catch(() => setMessage('Không thể tải dữ liệu đã lưu.'));
+
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
   }, []);
 
   const canInput = useMemo(
@@ -45,6 +70,10 @@ export default function HomePage() {
     }),
     [results]
   );
+  const visiblePrizeKeys = useMemo(
+    () => ORDER.filter((key) => canInput[key] || results[key].length > 0),
+    [canInput, results]
+  );
 
   const saveResults = async (next: LotteryResults) => {
     const response = await fetch('/api/results', {
@@ -56,6 +85,22 @@ export default function HomePage() {
     if (!response.ok) {
       throw new Error('Save failed');
     }
+  };
+
+  const showValidationToast = (key: PrizeKey, text: string) => {
+    const isLast3DuplicateError = text.startsWith(LAST3_DUPLICATE_PREFIX);
+    if (!isLast3DuplicateError && !TOAST_KEYS.includes(key)) {
+      return;
+    }
+
+    setToastMessage(text);
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage('');
+      toastTimerRef.current = null;
+    }, 4200);
   };
 
   const validateEntry = (key: PrizeKey, value: string): string | null => {
@@ -72,8 +117,18 @@ export default function HomePage() {
       return `Số ${value} đã tồn tại trong ${META[key].label}.`;
     }
 
-    if (META[key].digits === 4 && results.consolation.includes(value.slice(1))) {
-      return `3 số cuối (${value.slice(1)}) trùng với giải khuyến khích.`;
+    const last3 = value.slice(-3);
+    const conflictedPrize = ORDER.find((prizeKey) =>
+      (results[prizeKey] ?? []).some((existing) => {
+        const normalizedExisting = String(existing ?? '');
+        if (prizeKey === key && normalizedExisting === value) {
+          return false;
+        }
+        return normalizedExisting.slice(-3) === last3;
+      })
+    );
+    if (conflictedPrize) {
+      return `3 số cuối (${last3}) trùng với ${META[conflictedPrize].label}.`;
     }
 
     return null;
@@ -84,7 +139,9 @@ export default function HomePage() {
     setMessage('');
 
     if (!canInput[key]) {
-      setMessage('Vui lòng nhập đúng thứ tự các nhóm giải.');
+      const text = 'Vui lòng nhập đúng thứ tự các nhóm giải.';
+      setMessage(text);
+      showValidationToast(key, text);
       return;
     }
 
@@ -93,11 +150,14 @@ export default function HomePage() {
 
     if (error) {
       setMessage(error);
+      showValidationToast(key, error);
       return;
     }
 
     if (results[key].length >= META[key].max) {
-      setMessage(`${META[key].label} đã đủ số lượng.`);
+      const text = `${META[key].label} đã đủ số lượng.`;
+      setMessage(text);
+      showValidationToast(key, text);
       return;
     }
 
@@ -108,8 +168,11 @@ export default function HomePage() {
       setResults(next);
       setInputs((prev) => ({ ...prev, [key]: '' }));
       setMessage(`Đã lưu ${value} cho ${META[key].label}.`);
+      setToastMessage('');
     } catch {
-      setMessage('Không thể lưu dữ liệu vào file.');
+      const text = 'Không thể lưu dữ liệu vào file.';
+      setMessage(text);
+      showValidationToast(key, text);
     }
   };
 
@@ -117,14 +180,13 @@ export default function HomePage() {
     <main className="page">
       <aside className="sidebar">
         <h1>🎋 Xổ Số Tết</h1>
-        <p className="subtitle">Nhập số theo thứ tự giải để lưu an toàn.</p>
+        <p className="subtitle">Quay số từ 0000 - 2999</p>
 
         {ORDER.map((key) => (
           <section className="input-card" key={key}>
-            <h2>{META[key].label}</h2>
-            <p>
-              {results[key].length}/{META[key].max}
-            </p>
+            <h2>
+              {META[key].label} ({META[key].label === 'Giải khuyến khích' ? `${results[key].length * 3}/${META[key].max * 3}` : `${results[key].length}/${META[key].max}`})
+            </h2>
             <form onSubmit={(e) => void onSubmit(e, key)}>
               <input
                 value={inputs[key]}
@@ -145,17 +207,57 @@ export default function HomePage() {
 
       <section className="board">
         <h2>Bảng kết quả quay số</h2>
-        {ORDER.map((key) => (
-          <article className="result-block" key={key}>
-            <h3>{META[key].label}</h3>
-            <ul className="number-grid">
-              {results[key].map((n) => (
-                <li key={n}>{n}</li>
-              ))}
-            </ul>
-          </article>
-        ))}
+        <div className="results-layout">
+          {visiblePrizeKeys.map((key) => {
+            const isSinglePrize = META[key].max === 1;
+            const isHighlightPrize = key === 'second' || isSinglePrize;
+
+            return (
+              <article
+                className={`result-block prize-${key} ${key === 'consolation' ? 'is-consolation' : ''} ${isHighlightPrize ? 'is-single' : ''}`}
+                key={key}
+              >
+                <div className="result-head">
+                  <h3>{META[key].label}</h3>
+                  <span className="result-count">
+                    {results[key].length}/{META[key].max}
+                  </span>
+                </div>
+                {isSinglePrize ? (
+                  <div className="single-number-wrap">
+                    {results[key].length === 0 ? (
+                      <p className="empty-state">Chưa có kết quả</p>
+                    ) : (
+                      <p className="single-number">{results[key][0]}</p>
+                    )}
+                  </div>
+                ) : key === 'second' ? (
+                  <ul className="single-list">
+                    {results[key].length === 0 ? (
+                      <li className="empty-state">Chưa có kết quả</li>
+                    ) : (
+                      results[key].map((n) => (
+                        <li className="single-chip" key={n}>
+                          {n}
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                ) : (
+                  <ul className="number-grid">
+                    {results[key].length === 0 ? (
+                      <li className="empty-state">Chưa có kết quả</li>
+                    ) : (
+                      results[key].map((n) => <li key={n}>{n}</li>)
+                    )}
+                  </ul>
+                )}
+              </article>
+            );
+          })}
+        </div>
       </section>
+      {toastMessage && <div className="toast-error">{toastMessage}</div>}
     </main>
   );
 }
